@@ -1,0 +1,51 @@
+import pyvisa
+import time
+
+def main():
+    rm = pyvisa.ResourceManager()
+    # Configure a porta serial via PyVISA. Em Windows, "COM3" corresponde a "ASRL3::INSTR".
+    # Ajuste o endereço conforme seu sistema operacional, ex.: "/dev/ttyACM0" para Linux/Mac.
+    arduino = rm.open_resource(
+        "ASRL5::INSTR",
+        baud_rate=9600,
+        data_bits=8,
+        parity=pyvisa.constants.Parity.none,
+        stop_bits=pyvisa.constants.StopBits.one,
+        read_termination='\n',
+        write_termination='\n',
+        encoding = 'utf-8',
+        open_timeout = 1000000
+    )
+    time.sleep(2)  # Aguarda o Arduino reiniciar
+    comando = 'algo'
+    while comando!='parar':
+        comando = input("direcao e passos")
+        arduino.write(comando)
+        numero_str = comando[1:]  # Pega tudo depois do 'f'
+        numero = int(numero_str) 
+        direc = comando[0]
+        print(direc)
+        if direc == f:
+            direc = 'Frente'
+        elif direc == 'b' | 'B':
+            direc = 'Trás'
+        print("Comando enviado:", comando,direc)
+        
+        resposta_recebida = False
+        while not resposta_recebida:
+            linha = arduino.read().strip()
+            if f"{numero} passos dados no sentido: {direc}" in linha:
+                print("Arduino respondeu:", linha)
+                resposta_recebida = True
+        
+        print("Acionando sistema Terahertz...")
+        # Função placeholder para acionar o sistema THz
+        def Thz():
+            return
+        # Aqui você pode incluir o código que aciona seu sistema THz
+        time.sleep(1)  # Simula o tempo de operação do THz
+        
+        time.sleep(0.5)  # Pausa antes de enviar o próximo comando
+    return print('Medida Completa')
+if __name__ == "__main__":
+    main()
