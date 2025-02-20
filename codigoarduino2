@@ -1,0 +1,208 @@
+/*
+ * Código para controle de motores 28BYJ-48 sem a biblioteca Stepper.
+ * Permite ajustar a velocidade em RPM, convertendo-a para atraso por meio-passos.
+ *
+ * Comandos via Serial:
+ *   F<número> : Mover par 1 (motores 0 e 1) para frente (sentidos opostos)
+ *   B<número> : Mover par 1 para tras
+ *   L<número> : Mover par 2 (motores 2 e 3) para esquerda/para cima
+ *   R<número> : Mover par 2 para direita/para baixo
+ *   V<número> : Ajustar velocidade (RPM)
+ *   S         : Parar todos os motores
+ */
+
+const int stepsPerRevolution = 2048;  // Número de meio-passos para uma revolução do 28BYJ-48
+
+// Definição dos pinos para cada motor
+const int motorPins[4][4] = {
+  {2, 3, 4, 5},     // Motor 0
+  {6, 7, 8, 9},     // Motor 1
+  {10, 11, 12, 13}, // Motor 2
+  {A0, A1, A2, A3}  // Motor 3
+};
+
+// Sequência de meio-passos para o 28BYJ-48
+int halfStepSequence[8][4] = {
+  {1, 0, 0, 0},
+  {1, 1, 0, 0},
+  {0, 1, 0, 0},
+  {0, 1, 1, 0},
+  {0, 0, 1, 0},
+  {0, 0, 1, 1},
+  {0, 0, 0, 1},
+  {1, 0, 0, 1}
+};
+
+// Controle de velocidade: usaremos RPM e calcularemos o atraso por meio-passos.
+int motorRPM = 15;             // Valor padrão de RPM
+unsigned int motorDelay = 0;     // Delay (em ms) por meio-passos, calculado a partir do RPM
+
+// Atualiza o delay para cada meio-passo com base no RPM
+void updateMotorDelay() {
+  // Fórmula: delay (ms) = 60000 / (stepsPerRevolution * RPM)
+  motorDelay = 60000UL / (stepsPerRevolution * motorRPM);
+}
+
+// Desliga os pinos do motor (colocando-os em LOW)
+void stopMotor(int motorNum) {
+  for (int p = 0; p < 4; p++) {
+    digitalWrite(motorPins[motorNum][p], LOW);
+  }
+}
+
+void setup() {
+  Serial.begin(9600);
+  
+  // Configura todos os pinos como OUTPUT e os desliga inicialmente
+  for (int m = 0; m < 4; m++) {
+    for (int p = 0; p < 4; p++) {
+      pinMode(motorPins[m][p], OUTPUT);
+      digitalWrite(motorPins[m][p], LOW);
+    }
+  }
+  
+  updateMotorDelay();  // Calcula o atraso inicial conforme o RPM padrão
+  
+  Serial.println("Controle de Motores Iniciado.");
+  Serial.println("Comandos:");
+  Serial.println("  F<número> : Mover par 1 (motores 0 e 1) para frente (sentidos opostos)");
+  Serial.println("  B<número> : Mover par 1 para tras");
+  Serial.println("  L<número> : Mover par 2 (motores 2 e 3) para esquerda/para cima");
+  Serial.println("  R<número> : Mover par 2 para direita/para baixo");
+  Serial.println("  V<número> : Ajustar velocidade (RPM)");
+  Serial.println("  S         : Parar todos os motores");
+}
+
+// --- Funções auxiliares de movimentação ---
+
+// Executa um meio-passo para o motor especificado, usando o índice da sequência
+void stepMotor(int motorNum, int stepIndex) {
+  for (int pin = 0; pin < 4; pin++) {
+    digitalWrite(motorPins[motorNum][pin], halfStepSequence[stepIndex][pin]);
+  }
+}
+
+// Função genérica para mover um par de motores.
+// Os parâmetros mapStep1 e mapStep2 definem a ordem dos meio-passos para cada motor.
+void moveMotorPair(int motorNum1, int motorNum2, int cycles, int (*mapStep1)(int), int (*mapStep2)(int)) {
+  for (int i = 0; i < cycles; i++) {
+    for (int s = 0; s < 8; s++) {
+      stepMotor(motorNum1, mapStep1(s));
+      stepMotor(motorNum2, mapStep2(s));
+      delay(motorDelay);
+    }
+  }
+}
+
+// Mapeamento da sequência de meio-passos
+int normalStep(int s) {
+  return s;  // Ordem normal
+}
+
+int reversedStep(int s) {
+  return 7 - s;  // Ordem invertida
+}
+
+// Movimenta o par 1 para frente: motor 0 (ordem normal) e motor 1 (ordem invertida)
+void moveMotorsForward(int motorNum1, int motorNum2, int cycles) {
+  moveMotorPair(motorNum1, motorNum2, cycles, normalStep, reversedStep);
+}
+
+// Movimenta o par 1 para trás: motor 0 (ordem invertida) e motor 1 (ordem normal)
+void moveMotorsBackward(int motorNum1, int motorNum2, int cycles) {
+  moveMotorPair(motorNum1, motorNum2, cycles, reversedStep, normalStep);
+}
+
+// Movimenta o par 2 para cima (ou esquerda): ambos os motores com ordem normal
+void moveMotorsUp(int motorNum1, int motorNum2, int cycles) {
+  moveMotorPair(motorNum1, motorNum2, cycles, normalStep, normalStep);
+}
+
+// Movimenta o par 2 para baixo (ou direita): ambos os motores com ordem invertida
+void moveMotorsDown(int motorNum1, int motorNum2, int cycles) {
+  moveMotorPair(motorNum1, motorNum2, cycles, reversedStep, reversedStep);
+}
+
+// Desliga todos os motores
+void stopAllMotors() {
+  for (int m = 0; m < 4; m++) {
+    stopMotor(m);
+  }
+}
+
+// --- Loop principal: processamento dos comandos Serial ---
+void loop() {
+  if (Serial.available()) {
+    String input = Serial.readStringUntil('\n');
+    input.trim();
+    if (input.length() == 0) return;
+    
+    char command = toupper(input.charAt(0));
+    int value = 0;
+    if (input.length() > 1) {
+      String valueStr = input.substring(1);
+      value = valueStr.toInt();
+    }
+    
+    // Se o valor não for fornecido, define um valor padrão de 100 ciclos.
+    int cycles = (value > 0 ? value : 100);
+    
+    switch (command) {
+      case 'F':
+        // Mover par 1 para frente (motores 0 e 1)
+        moveMotorsForward(0, 1, cycles);
+        // Desliga os motores logo após o movimento para garantir que pararam
+        stopMotor(0);
+        stopMotor(1);
+        Serial.print(cycles);
+        Serial.println(" passos dados no sentido: Frente");
+        break;
+      case 'B':
+        // Mover par 1 para trás
+        moveMotorsBackward(0, 1, cycles);
+        stopMotor(0);
+        stopMotor(1);
+        Serial.print(cycles);
+        Serial.println(" passos dados no sentido: Trás");
+        break;
+      case 'L':
+        // Mover par 2 para esquerda/para cima (motores 2 e 3)
+        moveMotorsUp(2, 3, cycles);
+        stopMotor(2);
+        stopMotor(3);
+        Serial.print(cycles);
+        Serial.println(" passos dados no sentido: Esquerda/Acima");
+        break;
+      case 'R':
+        // Mover par 2 para direita/para baixo (motores 2 e 3)
+        moveMotorsDown(2, 3, cycles);
+        stopMotor(2);
+        stopMotor(3);
+        Serial.print(cycles);
+        Serial.println(" passos dados no sentido: Direita/Abaixo");
+        break;
+      case 'V':
+        // Ajustar velocidade em RPM
+        if (value > 0) {
+          motorRPM = value;
+          updateMotorDelay();
+          Serial.print("Velocidade ajustada para: ");
+          Serial.print(motorRPM);
+          Serial.print(" RPM (Delay por meio-passos: ");
+          Serial.print(motorDelay);
+          Serial.println(" ms)");
+        } else {
+          Serial.println("Valor inválido para velocidade.");
+        }
+        break;
+      case 'S':
+        // Parar todos os motores
+        stopAllMotors();
+        Serial.println("Motores parados.");
+        break;
+      default:
+        Serial.println("Comando inválido.");
+        break;
+    }
+  }
+}
