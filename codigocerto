@@ -1,0 +1,170 @@
+from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QPushButton, QSpinBox, QLabel, QDoubleSpinBox, QComboBox
+import pyqtgraph as pg
+import sys
+from PyQt5.QtCore import QTimer
+import serial
+import time
+
+# Classe LockIn (mantida simples para o exemplo)
+class LockIn:
+    def X(self):
+        return 1  # Simulação da leitura do LockIn
+
+# Classe principal da aplicação, integrando o controle do motor via Arduino
+class RealTimePlot(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Real-Time PyQtGraph Plot")
+        
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        layout = QVBoxLayout()
+        central_widget.setLayout(layout)
+        
+        self.plot_widget = pg.PlotWidget()
+        layout.addWidget(self.plot_widget)
+        
+        # Controle para o número de iterações da rotina
+        self.iter_label = QLabel("Número de Iterações:")
+        self.iter_input = QSpinBox()
+        self.iter_input.setRange(1, 1000)
+        self.iter_input.setValue(10)
+        
+        # Controle para os passos enviados em cada movimento
+        # (Sabendo que F1000 corresponde a 1 mm, por exemplo)
+        self.mov_label = QLabel("Passos por Movimento:")
+        self.mov_input = QSpinBox()
+        self.mov_input.setRange(1, 1000000)
+        self.mov_input.setValue(1000)  # 1000 passos = 1 mm
+        
+        # Controle para a direção do movimento: F (frente) ou B (trás)
+        self.dir_label = QLabel("Direção:")
+        self.dir_box = QComboBox()
+        self.dir_box.addItems(["F", "B"])
+        
+        # Controle para o tempo de espera entre movimentos (em segundos) após o movimento
+        self.wait_label = QLabel("Tempo de Espera (s):")
+        self.wait_input = QDoubleSpinBox()
+        self.wait_input.setRange(0.01, 60.0)
+        self.wait_input.setSingleStep(0.1)
+        self.wait_input.setValue(1.0)
+        
+        # Adiciona os controles na interface
+        layout.addWidget(self.iter_label)
+        layout.addWidget(self.iter_input)
+        layout.addWidget(self.mov_label)
+        layout.addWidget(self.mov_input)
+        layout.addWidget(self.dir_label)
+        layout.addWidget(self.dir_box)
+        layout.addWidget(self.wait_label)
+        layout.addWidget(self.wait_input)
+        
+        self.start_button = QPushButton("Start")
+        self.stop_button = QPushButton("Stop")
+        self.close_button = QPushButton("Close")
+        layout.addWidget(self.start_button)
+        layout.addWidget(self.stop_button)
+        layout.addWidget(self.close_button)
+        
+        self.x_data = []
+        self.y_data = []
+        self.plot = self.plot_widget.plot(self.x_data, self.y_data, pen='b', symbol='o', symbolBrush='b')
+        
+        # Inicializa o LockIn
+        self.lockin = LockIn()
+        
+        # Inicializa a conexão com o Arduino (ajuste a porta conforme necessário)
+        self.arduino = serial.Serial('COM5', 9600, timeout=1)
+        time.sleep(2)  # Aguarda a estabilização da conexão
+        
+        self.start_button.clicked.connect(self.start_motor_routine)
+        self.stop_button.clicked.connect(self.stop_motor_routine)
+        self.close_button.clicked.connect(self.close_application)
+        
+        self.current_iteration = 0
+        self.total_iterations = self.iter_input.value()
+        self.running = False
+        
+    def update_plot(self):
+        """Realiza a leitura do LockIn e adiciona o ponto experimental ao gráfico."""
+        x = len(self.x_data)
+        y = self.lockin.X()  # Leitura do LockIn
+        self.x_data.append(x)
+        self.y_data.append(y)
+        self.plot.setData(self.x_data, self.y_data)
+        print(f"Ponto medido: ({x}, {y})")
+    
+    def start_motor_routine(self):
+        """Inicia a rotina: mede o ponto inicial e dispara a sequência de movimento/medição."""
+        self.current_iteration = 0
+        self.total_iterations = self.iter_input.value()
+        self.running = True
+        
+        self.start_button.setEnabled(False)
+        self.stop_button.setEnabled(True)
+        
+        # Medida inicial antes de mover
+        self.update_plot()
+        # Inicia a sequência de comando para o motor
+        QTimer.singleShot(0, self.motor_sequence_step)
+    
+    def motor_sequence_step(self):
+        """Envia o comando para mover o motor e agenda a medição e a próxima iteração."""
+        if not self.running:
+            return
+        
+        if self.current_iteration < self.total_iterations:
+            # Envia o comando para mover o motor
+            self.move_motor(self.mov_input.value())
+            print(f"Iteração {self.current_iteration+1}/{self.total_iterations} iniciada.")
+            self.current_iteration += 1
+            
+            # Calcula o tempo de movimento:
+            # tempo de movimento = (passos / 100) segundos
+            movement_time = self.mov_input.value() / 100
+            # tempo total = tempo de movimento + tempo de espera definido pelo usuário
+            delay_time = movement_time + self.wait_input.value()
+            QTimer.singleShot(int(delay_time * 1000), self.measure_and_continue)
+        else:
+            print("Rotina completa.")
+            self.stop_motor_routine()
+    
+    def measure_and_continue(self):
+        """Faz a medição ao fim da iteração e inicia a próxima sequência."""
+        self.update_plot()
+        self.motor_sequence_step()
+    
+    def stop_motor_routine(self):
+        """Interrompe a rotina."""
+        self.running = False
+        self.start_button.setEnabled(True)
+        self.stop_button.setEnabled(False)
+        print("Rotina interrompida pelo usuário.")
+    
+    def close_application(self):
+        self.stop_motor_routine()
+        if self.arduino.is_open:
+            self.arduino.close()    # Fecha a conexão com o Arduino
+        self.close()
+        QApplication.instance().quit()
+    
+    def move_motor(self, steps):
+        """
+        Envia comando para o Arduino mover o motor com o número de passos especificado.
+        O comando será 'F<steps>' ou 'B<steps>' conforme a direção escolhida.
+        """
+        direction = self.dir_box.currentText()  # Obtém a direção ("F" ou "B")
+        command = f"{direction}{steps}\n"
+        self.arduino.write(command.encode('utf-8'))
+        print(f"Comando enviado para o Arduino: {command.strip()}")
+
+if __name__ == "__main__":
+    app = QApplication.instance()
+    if not app:
+        app = QApplication(sys.argv)
+    main_win = RealTimePlot()
+    main_win.show()
+    try:
+        sys.exit(app.exec_())
+    except SystemExit:
+        print("Aplicação encerrada corretamente.")
